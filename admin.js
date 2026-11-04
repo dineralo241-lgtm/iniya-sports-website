@@ -2,10 +2,11 @@ import {firebaseConfig} from './firebase-config.js';
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,signOut,EmailAuthProvider,reauthenticateWithCredential,updatePassword} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {getFirestore,doc,onSnapshot,setDoc} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import {getStorage,ref as storageRef,uploadBytes,getDownloadURL} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js';
 const ADMIN_UID='xEnhWM5Wvabjlkkf5DctPtYw2l02';
 const ADMIN_USERNAME='01768487228';
 const ADMIN_EMAIL='dineralo241@gmail.com';
-const $=id=>document.getElementById(id), app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app),site=doc(db,'store','site');
+const $=id=>document.getElementById(id), app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app),storage=getStorage(app),site=doc(db,'store','site');
 let state={products:[],categories:['ফুটবল','ক্রিকেট','ব্যাডমিন্টন','জার্সি','বুট','কিডস','অন্যান্য'],settings:{},categoryPhotos:{}},unsubscribe=null;
 const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function notice(t){$('status').textContent=t;}
@@ -17,8 +18,32 @@ $('loginForm').onsubmit=async e=>{e.preventDefault();try{$('loginError').textCon
 onAuthStateChanged(auth,user=>{if(user && user.uid!==ADMIN_UID){signOut(auth);user=null;}if(unsubscribe){unsubscribe();unsubscribe=null;}$('login').classList.toggle('hide',!!user);$('dashboard').classList.toggle('hide',!user);if(user){$('signedIn').textContent=user.email;unsubscribe=onSnapshot(site,s=>{if(s.exists())state={...state,...s.data()};else fetch('../initial-data.json').then(r=>r.json()).then(d=>{state={...state,...d};render();fillSettings();});render();fillSettings();},e=>notice('ডেটা পড়া যায়নি: '+e.message));}});
 $('logout').onclick=()=>signOut(auth);
 document.querySelectorAll('nav [data-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav [data-tab]').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hide',x.id!==b.dataset.tab));});
-$('reset').onclick=()=>{$('productForm').reset();$('pid').value='';};$('filter').oninput=render;
-$('productForm').onsubmit=async e=>{e.preventDefault();try{let id=$('pid').value||'p-'+crypto.randomUUID(),old=state.products.find(x=>x.id===id),raw=String($('purl').value||'').split(/[\n,]+/).map(x=>x.trim()).filter(Boolean),images=raw.length?raw.map(x=>upload({value:x})).filter(Boolean):(old?.images||[]),image=images[0]||old?.image;if(!image)throw Error('পণ্যের ছবি দিন');let p={id,name:$('pname').value.trim(),cat:$('pcat').value,price:Number($('pprice').value),offer:Number($('poffer').value)||0,colors:$('pcolors').value.split(',').map(x=>x.trim()).filter(Boolean),stock:$('pstock').value==='true',description:$('pdesc').value.trim(),image,images};state.products=old?state.products.map(x=>x.id===id?p:x):[p,...state.products];await save();$('reset').click();render()}catch(err){alert(err.message)}};
+$('reset').onclick=()=>{$('productForm').reset();$('pid').value='';$('pfiles').value='';};$('filter').oninput=render;
+$('productForm').onsubmit=async e=>{e.preventDefault();const submit=e.submitter;try{
+let id=$('pid').value||'p-'+crypto.randomUUID(),old=state.products.find(x=>x.id===id);
+let raw=String($('purl').value||'').split(/[\n,]+/).map(x=>x.trim()).filter(Boolean);
+let images=raw.length?raw.map(x=>upload({value:x})).filter(Boolean):(old?.images||[]);
+const files=Array.from($('pfiles').files||[]);
+if(files.length){
+  if(!auth.currentUser||auth.currentUser.uid!==ADMIN_UID)throw Error('ছবি আপলোডের জন্য অ্যাডমিন লগইন প্রয়োজন।');
+  notice('ছবি আপলোড হচ্ছে...'); if(submit)submit.disabled=true;
+  for(let i=0;i<files.length;i++){
+    const file=files[i];
+    if(!file.type.startsWith('image/'))throw Error('শুধু ছবি ফাইল আপলোড করুন।');
+    if(file.size>8*1024*1024)throw Error('প্রতি ছবির সর্বোচ্চ সাইজ ৮ MB হতে পারবে।');
+    const clean=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const path=`products/${ADMIN_UID}/${id}/${Date.now()}-${i}-${clean}`;
+    const target=storageRef(storage,path);
+    await uploadBytes(target,file,{contentType:file.type});
+    images.push(await getDownloadURL(target));
+    notice(`ছবি আপলোড হচ্ছে... ${i+1}/${files.length}`);
+  }
+}
+images=[...new Set(images)];
+let image=images[0]||old?.image;if(!image)throw Error('পণ্যের ছবি দিন');
+let p={id,name:$('pname').value.trim(),cat:$('pcat').value,price:Number($('pprice').value),offer:Number($('poffer').value)||0,colors:$('pcolors').value.split(',').map(x=>x.trim()).filter(Boolean),stock:$('pstock').value==='true',description:$('pdesc').value.trim(),image,images};
+state.products=old?state.products.map(x=>x.id===id?p:x):[p,...state.products];await save();$('reset').click();render()
+}catch(err){alert('সংরক্ষণ হয়নি: '+err.message)}finally{if(submit)submit.disabled=false}};
 $('productList').onclick=async e=>{let b=e.target.closest('button');if(!b)return;let id=b.dataset.edit||b.dataset.delete||b.dataset.copy||b.dataset.share,p=state.products.find(x=>x.id===id);if(!p)return;if(b.dataset.copy){await navigator.clipboard.writeText(link(id));notice('পণ্যের লিংক কপি হয়েছে');}else if(b.dataset.share){window.open('https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(link(id)),'_blank','noopener');}else if(b.dataset.delete){if(confirm('পণ্য মুছে ফেলবেন?')){state.products=state.products.filter(x=>x.id!==id);await save();render();}}else{ $('pid').value=p.id;$('pname').value=p.name;$('pcat').value=p.cat;$('pprice').value=p.price;$('poffer').value=p.offer||0;$('pcolors').value=(p.colors||[]).join(', ');$('pstock').value=String(p.stock!==false);$('pdesc').value=p.description||'';$('purl').value=(p.images&&p.images.length?p.images:[p.image]).filter(x=>String(x).startsWith('https://')).join('\\n');$('productForm').scrollIntoView({behavior:'smooth'});}};
 $('catForm').onsubmit=async e=>{e.preventDefault();try{let c=$('catName').value.trim();if(!c||state.categories.includes(c))throw Error('নতুন ও আলাদা নাম দিন');let url=upload($('catFile'));state.categories.push(c);if(url)state.categoryPhotos[c]=url;await save();e.target.reset();render()}catch(err){alert(err.message)}};
 $('catList').onclick=async e=>{let b=e.target.closest('button');if(!b)return;let c=b.dataset.catEdit||b.dataset.catDelete;if(b.dataset.catDelete){if(state.products.some(p=>p.cat===c))return alert('এই ক্যাটাগরিতে পণ্য আছে; আগে সরিয়ে নিন');if(confirm('ক্যাটাগরি মুছবেন?')){state.categories=state.categories.filter(x=>x!==c);delete state.categoryPhotos[c];await save();render();}}else{let url=prompt('ক্যাটাগরির নতুন HTTPS ছবির লিংক দিন',state.categoryPhotos[c]||'');if(url!==null){try{state.categoryPhotos[c]=upload({value:url})||'';await save();render()}catch(err){alert(err.message)}}}};
